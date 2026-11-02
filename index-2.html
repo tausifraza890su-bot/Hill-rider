@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<title>Hill Rider</title>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#5ec2f0">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Hill Rider">
+<link rel="apple-touch-icon" href="icon-192.png">
+<style>
+html,body{overscroll-behavior:none;margin:0;height:100%;background:#5ec2f0;overflow:hidden;touch-action:none;font-family:system-ui,Arial,sans-serif;user-select:none;-webkit-user-select:none}
+canvas{display:block;width:100%;height:100%}
+.b{position:absolute;bottom:18px;width:120px;height:120px;border-radius:50%;border:0;font-size:20px;font-weight:800;color:#fff;opacity:.8;touch-action:none}
+#brake{left:18px;background:#d9534f}
+#gas{right:18px;background:#2e9e4f}
+#ov{position:absolute;inset:0;background:rgba(0,0,0,.65);color:#fff;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;text-align:center;padding:20px}
+#ov h1{margin:0;font-size:38px;color:#ffd93b}
+#ov p{margin:0;font-size:17px;line-height:1.5}
+#go{font-size:22px;font-weight:800;padding:12px 36px;border:0;border-radius:12px;background:#ffd93b;color:#222}
+</style>
+</head>
+<body>
+<canvas id="cv"></canvas>
+<button class="b" id="brake">BRAKE</button>
+<button class="b" id="gas">GAS</button>
+<div id="ov"></div>
+<script>
+const cv=document.getElementById("cv"),g=cv.getContext("2d"),ov=document.getElementById("ov");
+let W,H,Z;
+function rs(){W=cv.width=innerWidth;H=cv.height=innerHeight;Z=Math.max(.55,Math.min(W/800,H/450))}
+addEventListener("resize",rs);rs();
+
+// ---- Terrain: hills get bigger as you go ----
+const ramp=x=>Math.min(1,Math.max(x,0)/900);
+function gy(x){const a=Math.min(70+x*.012,230)*ramp(x);return 420-a*(Math.sin(x*.004)+.5*Math.sin(x*.011+1)+.25*Math.sin(x*.027+2))}
+const sl=x=>(gy(x+2)-gy(x-2))/4;
+
+// ---- Game state ----
+let car,cam,got,fuel,coins,idle,best=0,state="menu",gas=0,brk=0;
+try{best=+localStorage.getItem("hrbest")||0}catch(e){}
+const WH=[[-34,16],[34,16]],R=18,K=.25,C=.35,I=900;
+
+function reset(){
+  car={x:100,y:gy(100)-40,vx:0,vy:0,a:0,w:0,wr:0};
+  cam={x:car.x,y:car.y};got=new Set();fuel=100;coins=0;idle=0;state="play";ov.style.display="none";
+}
+function show(t,p){ov.innerHTML="<h1>"+t+"</h1><p>"+p+"</p><button id=\"go\">Play</button>";ov.style.display="flex";document.getElementById("go").onclick=reset}
+show("🏔️ Hill Rider","GAS dabao aage jaane ke liye,<br>BRAKE se ruko ya peeche jao.<br>Hawa mein GAS/BRAKE se gaadi ghumao.<br>🪙 coins aur ⛽ petrol uthao.<br><br>Phone ko landscape karo!");
+
+// ---- Physics ----
+function phys(dt){
+  const ca=Math.cos(car.a),sa=Math.sin(car.a);
+  let ax=0,ay=.4,al=0,air=true;
+  for(const [lx,ly] of WH){
+    const rx=lx*ca-ly*sa,ry=lx*sa+ly*ca,wx=car.x+rx,wy=car.y+ry;
+    const pen=wy+R-gy(wx);
+    if(pen>0){
+      air=false;
+      const s=sl(wx),n=Math.hypot(s,1),nx=s/n,ny=-1/n,tx=1/n,ty=s/n;
+      const vwx=car.vx-car.w*ry,vwy=car.vy+car.w*rx;
+      const vn=vwx*nx+vwy*ny,vt=vwx*tx+vwy*ty;
+      const Fn=Math.max(0,K*Math.min(pen,25)-C*vn);
+      let Ft=(fuel>0?gas*.24:0)-(brk&&vt<.5?.12:0)-(.03+brk*.25)*vt;
+      const lim=1.5*Fn+.02;Ft=Math.max(-lim,Math.min(lim,Ft));
+      const Fx=Fn*nx+Ft*tx,Fy=Fn*ny+Ft*ty;
+      ax+=Fx;ay+=Fy;al+=(rx*Fy-ry*Fx)/I;
+    }
+  }
+  if(air)al+=(brk-(fuel>0?gas:0))*.003;
+  car.vx+=ax*dt;car.vy+=ay*dt;car.w+=al*dt;car.w*=1-.003*dt;
+  car.x+=car.vx*dt;car.y+=car.vy*dt;car.a+=car.w*dt;car.wr+=car.vx/R*dt;
+}
+function over(t){
+  state="over";const d=Math.floor((car.x-100)/20);
+  if(d>best){best=d;try{localStorage.setItem("hrbest",best)}catch(e){}}
+  show(t,"Distance: "+d+" m<br>Coins: "+coins+"<br>Best: "+best+" m");
+}
+function update(fr){
+  for(let k=0;k<3;k++)phys(fr/3);
+  fuel-=(gas?.035:.008)*fr;
+  if(fuel<=0){fuel=0;if(Math.abs(car.vx)<.3){idle+=fr;if(idle>90)return over("⛽ Petrol khatam!")}else idle=0}
+  if(car.x<-100){car.x=-100;car.vx=0}
+  // collect coins and fuel cans
+  const ci=Math.round((car.x-400)/170);
+  for(let i=ci-1;i<=ci+1;i++){
+    const x=400+i*170,k="c"+i;
+    if(i>=0&&!got.has(k)&&Math.hypot(car.x-x,car.y-(gy(x)-50))<50){got.add(k);coins++}
+  }
+  const fj=Math.round((car.x-1200)/1400),fx=1200+fj*1400,fk="f"+fj;
+  if(fj>=0&&!got.has(fk)&&Math.hypot(car.x-fx,car.y-(gy(fx)-60))<55){got.add(fk);fuel=100}
+  // crash: head touches ground
+  const ca=Math.cos(car.a),sa=Math.sin(car.a),hx=car.x+4*ca+34*sa,hy=car.y+4*sa-34*ca;
+  if(hy>gy(hx)-2)return over("💥 Crash!");
+  cam.x+=(car.x+car.vx*10-cam.x)*.1;cam.y+=(car.y-cam.y)*.1;
+}
+
+// ---- Drawing ----
+function draw(){
+  const sky=g.createLinearGradient(0,0,0,H);sky.addColorStop(0,"#5ec2f0");sky.addColorStop(1,"#d8f3ff");
+  g.fillStyle=sky;g.fillRect(0,0,W,H);
+  g.save();g.scale(Z,Z);
+  const vw=W/Z,vh=H/Z,cx=cam.x-vw*.3,cy=cam.y-vh*.58;
+  g.fillStyle="#9ad48a";g.beginPath();g.moveTo(0,vh);
+  for(let i=0;i<=vw+20;i+=20){const wx=i+cx*.4;g.lineTo(i,vh*.62-Math.sin(wx*.006)*50-Math.sin(wx*.015)*20)}
+  g.lineTo(vw,vh);g.fill();
+  g.translate(-cx,-cy);
+  g.beginPath();g.moveTo(cx-10,cy+vh+60);
+  for(let x=cx-10;x<=cx+vw+20;x+=10)g.lineTo(x,gy(x));
+  g.lineTo(cx+vw+20,cy+vh+60);g.closePath();g.fillStyle="#8b5a2b";g.fill();
+  g.beginPath();
+  for(let x=cx-10;x<=cx+vw+20;x+=10){x===cx-10?g.moveTo(x,gy(x)):g.lineTo(x,gy(x))}
+  g.strokeStyle="#4caf50";g.lineWidth=10;g.stroke();
+  // coins
+  for(let i=Math.max(0,Math.floor((cx-400)/170));i<=Math.ceil((cx+vw-400)/170);i++){
+    const x=400+i*170;if(got.has("c"+i))continue;
+    g.fillStyle="#ffd93b";g.strokeStyle="#c9a000";g.lineWidth=3;g.beginPath();g.arc(x,gy(x)-50,12,0,7);g.fill();g.stroke();
+  }
+  // fuel cans
+  for(let j=Math.max(0,Math.floor((cx-1200)/1400));j<=Math.ceil((cx+vw-1200)/1400);j++){
+    const x=1200+j*1400;if(got.has("f"+j))continue;
+    g.fillStyle="#e53935";g.fillRect(x-14,gy(x)-76,28,32);
+    g.fillStyle="#fff";g.font="bold 20px Arial";g.textAlign="center";g.fillText("F",x,gy(x)-52);
+  }
+  if(car){
+    g.save();g.translate(car.x,car.y);g.rotate(car.a);
+    g.fillStyle="#e53935";g.fillRect(-46,-14,92,24);
+    g.beginPath();g.moveTo(-24,-14);g.lineTo(-14,-34);g.lineTo(16,-34);g.lineTo(28,-14);g.fill();
+    g.fillStyle="#bbdefb";g.beginPath();g.moveTo(-17,-16);g.lineTo(-11,-30);g.lineTo(12,-30);g.lineTo(21,-16);g.fill();
+    g.fillStyle="#ffcc80";g.beginPath();g.arc(2,-24,6,0,7);g.fill();
+    for(const [lx,ly] of WH){
+      g.save();g.translate(lx,ly);g.rotate(car.wr);
+      g.fillStyle="#222";g.beginPath();g.arc(0,0,R,0,7);g.fill();
+      g.strokeStyle="#bbb";g.lineWidth=3;g.beginPath();g.moveTo(-R+4,0);g.lineTo(R-4,0);g.moveTo(0,-R+4);g.lineTo(0,R-4);g.stroke();
+      g.restore();
+    }
+    g.restore();
+  }
+  g.restore();
+  // HUD
+  if(car){
+    g.fillStyle="#fff";g.strokeStyle="rgba(0,0,0,.5)";g.lineWidth=4;g.font="bold 20px Arial";g.textAlign="left";
+    const t1="📏 "+Math.max(0,Math.floor((car.x-100)/20))+" m",t2="🪙 "+coins;
+    g.strokeText(t1,16,32);g.fillText(t1,16,32);g.strokeText(t2,16,60);g.fillText(t2,16,60);
+    const bw=Math.min(200,W*.3),bx=W/2-bw/2;
+    g.fillStyle="rgba(0,0,0,.4)";g.fillRect(bx,14,bw,16);
+    g.fillStyle=fuel>25?"#4caf50":"#e53935";g.fillRect(bx,14,bw*fuel/100,16);
+    g.textAlign="center";g.font="bold 13px Arial";g.fillStyle="#fff";g.fillText("FUEL",W/2,26);
+  }
+}
+
+// ---- Loop ----
+let last=performance.now();
+function loop(now){
+  const fr=Math.min(2,(now-last)/16.667);last=now;
+  if(state==="play")update(fr);
+  if(car)draw();else{g.clearRect(0,0,W,H)}
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+
+// ---- Controls ----
+function bind(id,set){
+  const el=document.getElementById(id);
+  el.addEventListener("pointerdown",e=>{e.preventDefault();set(1)});
+  for(const ev of ["pointerup","pointerleave","pointercancel"])el.addEventListener(ev,()=>set(0));
+}
+bind("gas",v=>gas=v);bind("brake",v=>brk=v);
+addEventListener("keydown",e=>{if(e.key==="ArrowRight"||e.key==="d")gas=1;if(e.key==="ArrowLeft"||e.key==="a")brk=1});
+addEventListener("keyup",e=>{if(e.key==="ArrowRight"||e.key==="d")gas=0;if(e.key==="ArrowLeft"||e.key==="a")brk=0});
+document.addEventListener("contextmenu",e=>e.preventDefault());
+if("serviceWorker" in navigator)addEventListener("load",()=>navigator.serviceWorker.register("sw.js").catch(()=>{}));
+</script>
+</body>
+</html>
